@@ -2,6 +2,8 @@ name: Publish Schwifty Rules
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "7,37 * * * *"
 
 permissions:
   contents: read

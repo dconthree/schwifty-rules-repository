@@ -2,6 +2,12 @@ name: Publish Schwifty Rules
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - export_airtable.py
+      - .github/workflows/publish-rules.yml
   schedule:
     - cron: "7,37 * * * *"
 
@@ -17,6 +23,7 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -30,10 +37,13 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Export Airtable data
+      - name: Build and validate complete Rules Repository
         env:
           AIRTABLE_TOKEN: ${{ secrets.AIRTABLE_TOKEN }}
         run: python export_airtable.py
+
+      - name: Verify generated JSON
+        run: python -m json.tool site/rules.json > /dev/null
 
       - name: Create repository landing page
         run: |

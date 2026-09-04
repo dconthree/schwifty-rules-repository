@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -21,6 +22,7 @@ TABLES = {
         "fields": {
             "name": "fldmyEdmJ7Af3dB9s",
             "domain_id": "fldZmLdAdgFxZQ3VC",
+            "instrument_group_aliases": "fldlIHplU1gkvwY8Z",
         },
     },
     "articulations": {
@@ -28,6 +30,7 @@ TABLES = {
         "fields": {
             "name": "fld2uUFVCyowan2vF",
             "domain_id": "fldDpRQZZAWgvLIeV",
+            "articulation_aliases": "fldDFaDnMi1NTPfRa",
         },
     },
     "classifications": {
@@ -117,6 +120,41 @@ def required_text(record: dict[str, object], field_id: str, label: str) -> str:
     return value.strip()
 
 
+def normalize_match_key(value: str) -> str:
+    """Normalize names and aliases the same way for collision checks."""
+    return " ".join(re.sub(r"[\W_]+", " ", value.casefold()).split())
+
+
+def parse_aliases(
+    record: dict[str, object], field_id: str, canonical_name: str, label: str
+) -> list[str]:
+    """Parse comma- or newline-separated aliases, preserving their entered order."""
+    value = fields(record).get(field_id)
+    if value is None:
+        return []
+    if not isinstance(value, str):
+        raise ValueError(f"{label} must be text on Airtable record {record['id']}")
+
+    canonical_key = normalize_match_key(canonical_name)
+    aliases: list[str] = []
+    seen: set[str] = set()
+    for candidate in re.split(r"[,\r\n]+", value):
+        alias = " ".join(candidate.split())
+        if not alias:
+            continue
+        alias_key = normalize_match_key(alias)
+        if not alias_key:
+            raise ValueError(
+                f"{label} contains an invalid alias on Airtable record {record['id']}"
+            )
+        if alias_key == canonical_key or alias_key in seen:
+            continue
+        seen.add(alias_key)
+        aliases.append(alias)
+
+    return aliases
+
+
 def links(record: dict[str, object], field_id: str) -> list[str]:
     value = fields(record).get(field_id, [])
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
@@ -188,6 +226,49 @@ def validate_unique_output_names(items: list[dict[str, object]], field: str, lab
         seen[normalized] = value
 
 
+def validate_alias_ownership(items: list[dict[str, object]], label: str) -> None:
+    canonical_owners: dict[str, tuple[str, str]] = {}
+    for item in items:
+        item_id = str(item["id"])
+        item_name = str(item["name"])
+        canonical_key = normalize_match_key(item_name)
+        previous_owner = canonical_owners.get(canonical_key)
+        if previous_owner and previous_owner[0] != item_id:
+            raise ValueError(
+                f"{label} names {previous_owner[1]!r} and {item_name!r} normalize "
+                "to the same value"
+            )
+        canonical_owners[canonical_key] = (item_id, item_name)
+
+    alias_owners: dict[str, tuple[str, str]] = {}
+
+    for item in items:
+        item_id = str(item["id"])
+        item_name = str(item["name"])
+        item_aliases = item.get("aliases")
+        if not isinstance(item_aliases, list) or not all(
+            isinstance(alias, str) for alias in item_aliases
+        ):
+            raise ValueError(f"Invalid aliases on {label} {item_name!r}")
+
+        for alias in item_aliases:
+            alias_key = normalize_match_key(alias)
+            canonical_owner = canonical_owners.get(alias_key)
+            if canonical_owner and canonical_owner[0] != item_id:
+                raise ValueError(
+                    f"{label} alias {alias!r} on {item_name!r} conflicts with canonical "
+                    f"name {canonical_owner[1]!r}"
+                )
+
+            previous_owner = alias_owners.get(alias_key)
+            if previous_owner and previous_owner[0] != item_id:
+                raise ValueError(
+                    f"{label} alias {alias!r} is assigned to both "
+                    f"{previous_owner[1]!r} and {item_name!r}"
+                )
+            alias_owners[alias_key] = (item_id, item_name)
+
+
 def main() -> int:
     token = os.environ.get("AIRTABLE_TOKEN")
     if not token:
@@ -200,29 +281,49 @@ def main() -> int:
     group_index, indexed_groups = unique_index(
         raw["instrument_groups"], group_fields["domain_id"], "instrument_group_id", "ig_"
     )
-    instrument_groups = [
-        {
-            "id": domain_id,
-            "name": required_text(record, group_fields["name"], "instrument_group_name"),
-        }
-        for record, domain_id in indexed_groups
-    ]
-    name_by_airtable_id(indexed_groups, group_fields["name"], "instrument_group_name")
+    group_names = name_by_airtable_id(
+        indexed_groups, group_fields["name"], "instrument_group_name"
+    )
+    instrument_groups = []
+    for record, domain_id in indexed_groups:
+        name = group_names[str(record["id"])]
+        instrument_groups.append(
+            {
+                "id": domain_id,
+                "name": name,
+                "aliases": parse_aliases(
+                    record,
+                    group_fields["instrument_group_aliases"],
+                    name,
+                    "instrument_group_aliases",
+                ),
+            }
+        )
+    validate_alias_ownership(instrument_groups, "Instrument group")
 
     articulation_fields = TABLES["articulations"]["fields"]
     articulation_index, indexed_articulations = unique_index(
         raw["articulations"], articulation_fields["domain_id"], "articulation_id", "art_"
     )
-    articulations = [
-        {
-            "id": domain_id,
-            "name": required_text(record, articulation_fields["name"], "articulation_name"),
-        }
-        for record, domain_id in indexed_articulations
-    ]
-    name_by_airtable_id(
+    articulation_names = name_by_airtable_id(
         indexed_articulations, articulation_fields["name"], "articulation_name"
     )
+    articulations = []
+    for record, domain_id in indexed_articulations:
+        name = articulation_names[str(record["id"])]
+        articulations.append(
+            {
+                "id": domain_id,
+                "name": name,
+                "aliases": parse_aliases(
+                    record,
+                    articulation_fields["articulation_aliases"],
+                    name,
+                    "articulation_aliases",
+                ),
+            }
+        )
+    validate_alias_ownership(articulations, "Articulation")
 
     classification_fields = TABLES["classifications"]["fields"]
     classification_index, indexed_classifications = unique_index(
@@ -342,7 +443,7 @@ def main() -> int:
 
     document = {
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "schema_version": 2,
+        "schema_version": 3,
         "instrument_groups": sorted(instrument_groups, key=lambda item: item["id"]),
         "articulations": sorted(articulations, key=lambda item: item["id"]),
         "classifications": sorted(classifications, key=lambda item: item["id"]),

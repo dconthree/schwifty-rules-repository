@@ -42,8 +42,30 @@ jobs:
           AIRTABLE_TOKEN: ${{ secrets.AIRTABLE_TOKEN }}
         run: python export_airtable.py
 
-      - name: Verify generated JSON
-        run: python -m json.tool site/rules.json > /dev/null
+      - name: Verify generated JSON and alias arrays
+        run: |
+          python -m json.tool site/rules.json > /dev/null
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          rules = json.loads(Path("site/rules.json").read_text(encoding="utf-8"))
+          if rules.get("schema_version") != 3:
+              raise SystemExit("Expected schema_version 3")
+
+          for collection_name in ("instrument_groups", "articulations"):
+              collection = rules.get(collection_name)
+              if not isinstance(collection, list):
+                  raise SystemExit(f"{collection_name} must be an array")
+              for item in collection:
+                  aliases = item.get("aliases")
+                  if not isinstance(aliases, list) or not all(
+                      isinstance(alias, str) for alias in aliases
+                  ):
+                      raise SystemExit(
+                          f"{collection_name} item {item.get('id')} has invalid aliases"
+                      )
+          PY
 
       - name: Create repository landing page
         run: |

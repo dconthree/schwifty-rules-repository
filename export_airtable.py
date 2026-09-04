@@ -30,6 +30,20 @@ TABLES = {
             "domain_id": "fldDpRQZZAWgvLIeV",
         },
     },
+    "classifications": {
+        "id": "tblxTtbxbXrqWrYc5",
+        "fields": {
+            "name": "fld9IgHYpwvshY3FY",
+            "domain_id": "fldpySMMzQQMnqLst",
+        },
+    },
+    "vocal_types": {
+        "id": "tblO2HCkWjHmrYndv",
+        "fields": {
+            "name": "fldqRu8LaSLoMvsGo",
+            "domain_id": "fldGH6dzkc6ISXatT",
+        },
+    },
     "taxonomy": {
         "id": "tbl3CQzX9cSrYKKfu",
         "fields": {
@@ -46,6 +60,7 @@ TABLES = {
         "fields": {
             "name": "fld5a8dmTTtHQsKFb",
             "mode": "fldOTvdz3kU5WnLax",
+            "classifications": "fldqA1uejbN4vesyA",
             "instrument_groups": "fldw31D3AzpjdAsei",
             "articulations": "fldvCxSHa9JAEEM2Y",
             "taxonomy_entries": "fldyYIfCIbCXSiZwa",
@@ -139,9 +154,38 @@ def unique_index(
 
 def resolve_many(record_ids: list[str], index: dict[str, str], label: str) -> list[str]:
     try:
-        return sorted(index[record_id] for record_id in record_ids)
+        return [index[record_id] for record_id in record_ids]
     except KeyError as error:
         raise ValueError(f"{label} references an unknown Airtable record: {error.args[0]}") from error
+
+
+def name_by_airtable_id(
+    indexed: list[tuple[dict[str, object], str]], field_id: str, label: str
+) -> dict[str, str]:
+    result: dict[str, str] = {}
+    seen: dict[str, str] = {}
+
+    for record, _ in indexed:
+        name = required_text(record, field_id, label)
+        normalized = name.casefold()
+        if normalized in seen:
+            raise ValueError(f"Duplicate {label}: {name!r} and {seen[normalized]!r}")
+        seen[normalized] = name
+        result[str(record["id"])] = name
+
+    return result
+
+
+def validate_unique_output_names(items: list[dict[str, object]], field: str, label: str) -> None:
+    seen: dict[str, str] = {}
+    for item in items:
+        value = item[field]
+        if not isinstance(value, str):
+            raise ValueError(f"Invalid {label} on {item['id']}")
+        normalized = value.casefold()
+        if normalized in seen:
+            raise ValueError(f"Duplicate {label}: {value!r} and {seen[normalized]!r}")
+        seen[normalized] = value
 
 
 def main() -> int:
@@ -163,6 +207,7 @@ def main() -> int:
         }
         for record, domain_id in indexed_groups
     ]
+    name_by_airtable_id(indexed_groups, group_fields["name"], "instrument_group_name")
 
     articulation_fields = TABLES["articulations"]["fields"]
     articulation_index, indexed_articulations = unique_index(
@@ -174,6 +219,42 @@ def main() -> int:
             "name": required_text(record, articulation_fields["name"], "articulation_name"),
         }
         for record, domain_id in indexed_articulations
+    ]
+    name_by_airtable_id(
+        indexed_articulations, articulation_fields["name"], "articulation_name"
+    )
+
+    classification_fields = TABLES["classifications"]["fields"]
+    classification_index, indexed_classifications = unique_index(
+        raw["classifications"],
+        classification_fields["domain_id"],
+        "classification_id",
+        "class_",
+    )
+    classification_names = name_by_airtable_id(
+        indexed_classifications, classification_fields["name"], "classification_name"
+    )
+    classifications = [
+        {
+            "id": domain_id,
+            "name": classification_names[str(record["id"])],
+        }
+        for record, domain_id in indexed_classifications
+    ]
+
+    vocal_type_fields = TABLES["vocal_types"]["fields"]
+    vocal_type_index, indexed_vocal_types = unique_index(
+        raw["vocal_types"], vocal_type_fields["domain_id"], "vocal_type_id", "lyr_"
+    )
+    vocal_type_names = name_by_airtable_id(
+        indexed_vocal_types, vocal_type_fields["name"], "vocal_type_name"
+    )
+    vocal_types = [
+        {
+            "id": domain_id,
+            "name": vocal_type_names[str(record["id"])],
+        }
+        for record, domain_id in indexed_vocal_types
     ]
 
     taxonomy_fields = TABLES["taxonomy"]["fields"]
@@ -188,6 +269,12 @@ def main() -> int:
         articulation_record_id = one_link(
             record, taxonomy_fields["articulation"], "articulation_name", False
         )
+        classification_record_id = one_link(
+            record, taxonomy_fields["classification"], "classification", True
+        )
+        vocal_type_record_id = one_link(
+            record, taxonomy_fields["vocal_type"], "vocal_type", True
+        )
         taxonomy_entries.append(
             {
                 "id": domain_id,
@@ -196,10 +283,10 @@ def main() -> int:
                 "articulation_id": (
                     articulation_index[articulation_record_id] if articulation_record_id else None
                 ),
-                "classification": required_text(
-                    record, taxonomy_fields["classification"], "classification"
-                ),
-                "vocal_type": required_text(record, taxonomy_fields["vocal_type"], "vocal_type"),
+                "classification_id": classification_index[classification_record_id],
+                "classification": classification_names[classification_record_id],
+                "vocal_type_id": vocal_type_index[vocal_type_record_id],
+                "vocal_type": vocal_type_names[vocal_type_record_id],
             }
         )
 
@@ -209,6 +296,9 @@ def main() -> int:
     )
     creative_mix_rules: list[dict[str, object]] = []
     for record, domain_id in indexed_rules:
+        classification_ids = resolve_many(
+            links(record, rule_fields["classifications"]), classification_index, "Rule"
+        )
         group_ids = resolve_many(
             links(record, rule_fields["instrument_groups"]), group_index, "Rule"
         )
@@ -218,14 +308,26 @@ def main() -> int:
         taxonomy_ids = resolve_many(
             links(record, rule_fields["taxonomy_entries"]), taxonomy_index, "Rule"
         )
-        if not (group_ids or articulation_ids or taxonomy_ids):
-            raise ValueError(f"Creative rule {domain_id} has no selectors")
+        selector_count = sum(
+            len(values)
+            for values in (classification_ids, group_ids, articulation_ids, taxonomy_ids)
+        )
+        if not 1 <= selector_count <= 3:
+            raise ValueError(
+                f"Creative rule {domain_id} must contain between one and three selectors; "
+                f"found {selector_count}"
+            )
+
+        mode = required_text(record, rule_fields["mode"], "mode")
+        if mode not in {"IncludeOnly", "ExcludeOnly"}:
+            raise ValueError(f"Creative rule {domain_id} has invalid mode: {mode!r}")
 
         creative_mix_rules.append(
             {
                 "id": domain_id,
                 "name": required_text(record, rule_fields["name"], "creative_rule_name"),
-                "mode": required_text(record, rule_fields["mode"], "mode"),
+                "mode": mode,
+                "classification_ids": classification_ids,
                 "instrument_group_ids": group_ids,
                 "articulation_ids": articulation_ids,
                 "taxonomy_entry_ids": taxonomy_ids,
@@ -235,11 +337,16 @@ def main() -> int:
             }
         )
 
+    validate_unique_output_names(taxonomy_entries, "display_name", "display_name")
+    validate_unique_output_names(creative_mix_rules, "name", "creative_rule_name")
+
     document = {
-        "schema_version": 1,
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "schema_version": 2,
         "instrument_groups": sorted(instrument_groups, key=lambda item: item["id"]),
         "articulations": sorted(articulations, key=lambda item: item["id"]),
+        "classifications": sorted(classifications, key=lambda item: item["id"]),
+        "vocal_types": sorted(vocal_types, key=lambda item: item["id"]),
         "taxonomy_entries": sorted(taxonomy_entries, key=lambda item: item["id"]),
         "creative_mix_rules": sorted(creative_mix_rules, key=lambda item: item["id"]),
     }
@@ -247,7 +354,7 @@ def main() -> int:
     output = Path("site/rules.json")
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
-        json.dumps(document, indent=2, ensure_ascii=False, sort_keys=True) + "\n",
+        json.dumps(document, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
     (output.parent / ".nojekyll").touch()

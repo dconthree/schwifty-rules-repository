@@ -1,4 +1,4 @@
-name: Publish Schwifty Rules - Schema 4
+name: Publish Schwifty Rules - Schema 4 - Five Selectors
 
 on:
   workflow_dispatch:
@@ -152,9 +152,9 @@ jobs:
                           f"Creative rule {rule['id']} has an unknown selector"
                       )
                   selector_count += len(values)
-              if not 1 <= selector_count <= 3:
+              if not 1 <= selector_count <= 5:
                   raise SystemExit(
-                      f"Creative rule {rule['id']} must have 1-3 selectors"
+                      f"Creative rule {rule['id']} must have 1-5 selectors"
                   )
           PY
 

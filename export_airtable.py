@@ -16,6 +16,7 @@ from pathlib import Path
 
 BASE_ID = "appcEYlv0o5RPwNS1"
 SCHEMA_VERSION = 4
+MAX_RULE_SELECTORS = 5
 OUTPUT_PATH = Path("site/rules.json")
 
 TABLES = {
@@ -526,9 +527,9 @@ def build_document(
                 taxonomy_entry_ids,
             )
         )
-        if not 1 <= selector_count <= 3:
+        if not 1 <= selector_count <= MAX_RULE_SELECTORS:
             raise ValueError(
-                f"Creative rule {domain_id} must contain between one and three "
+                f"Creative rule {domain_id} must contain between one and five "
                 f"selectors; found {selector_count}"
             )
 

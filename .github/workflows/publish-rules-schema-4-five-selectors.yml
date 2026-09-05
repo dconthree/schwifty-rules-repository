@@ -6,8 +6,8 @@ on:
     branches:
       - main
     paths:
-      - export_airtable.py
-      - .github/workflows/publish-rules.yml
+      - export_airtable_schema_4_five_selectors.py
+      - .github/workflows/publish-rules-schema-4-five-selectors.yml
   schedule:
     - cron: "7,37 * * * *"
 
@@ -40,7 +40,7 @@ jobs:
       - name: Build and validate Rules Repository schema 4
         env:
           AIRTABLE_TOKEN: ${{ secrets.AIRTABLE_TOKEN }}
-        run: python export_airtable.py
+        run: python export_airtable_schema_4_five_selectors.py
 
       - name: Verify generated schema 4 JSON
         run: |

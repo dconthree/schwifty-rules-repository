@@ -9,7 +9,7 @@ on:
       - export_airtable_schema_4_five_selectors.py
       - .github/workflows/publish-rules-schema-4-five-selectors.yml
   schedule:
-    - cron: "7,37 * * * *"
+    - cron: "7 16 * * *"
 
 permissions:
   contents: read
